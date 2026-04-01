@@ -1,0 +1,12 @@
+# Local config
+scripts/config.env
+
+# Python cache
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# Generated reports (optional: ignore local outputs)
+# data/

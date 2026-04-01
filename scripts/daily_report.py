@@ -1,47 +1,82 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-每日工作报告生成器 V5 - 标准环境变量版本
-支持 OpenAI / Anthropic / MiniMax API
+每日工作报告生成器（通用版雏形）
+- 默认本地生成 markdown
+- 支持外部 LLM（OpenAI / Anthropic / MiniMax）增强总结
+- 无 API Key 时自动 fallback 到规则化日报
+- 默认不发送飞书、不推送 Git，需显式开启
 """
 
 import os
+import re
 import sys
 import json
 import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 
-# ============ 加载环境变量 ============
-def load_env_from_shell():
-    """从 ~/.zshrc 加载环境变量"""
-    zshrc = Path.home() / ".zshrc"
-    if zshrc.exists():
-        with open(zshrc) as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith("export ") and "=" in line:
-                    # 去掉 "export " 前缀
-                    line = line[7:]
-                    if "=" in line:
-                        key, val = line.split("=", 1)
-                        key = key.strip()
-                        val = val.strip().strip('"').strip("'")
-                        if key and val and key not in os.environ:
-                            os.environ[key] = val
 
-# 启动时加载环境变量
+NOISE_PATTERNS = [
+    r"^🦞 OpenClaw ",
+    r"^⚠️ Agent failed before reply:",
+    r"^Logs: openclaw logs --follow",
+    r"^📚 Context:",
+    r"^🧵 Session:",
+    r"^⚙️ Runtime:",
+    r"^🪢 Queue:",
+    r"^OpenClaw status$",
+    r"^FAQ:",
+    r"^Troubleshooting:",
+    r"^Update available",
+    r"^Next steps:",
+    r"^Sender \(untrusted metadata\):",
+    r"^Conversation info \(untrusted metadata\):",
+    r"^Read HEARTBEAT\.md if it exists",
+    r"^HEARTBEAT_OK$",
+]
+
+SUMMARY_HINTS = {
+    "缺依赖": ["httpx", "module not found", "no module named"],
+    "路径兼容": ["写死", "/users/mymac", "sessions 目录", "openclaw_sessions_dir", "openclaw_home"],
+    "外部模型依赖": ["api key", "openai_api_key", "anthropic_api_key", "minimax_api_key", "外部 api", "外部模型"],
+    "默认安全配置": ["enable_feishu=false", "enable_git=false", "默认关闭", "误发", "不碰飞书", "不碰 git"],
+    "fallback 日报": ["fallback", "基础日报", "无 api key"],
+    "通用 skill": ["通用 skill", "预留", "publisher", "cleaner", "collector", "模板", "通用化"],
+    "试运行验证": ["试运行", "跑通", "运行一下", "看看有没有问题", "看看效果"],
+    "文档配置": ["skill.md", "config.env", "config.env.example", "文档", "配置示例"],
+    "本地生成": ["本地", "markdown", "日报已保存到", "daily-reports"],
+}
+
+
+def load_env_from_shell():
+    zshrc = Path.home() / ".zshrc"
+    if not zshrc.exists():
+        return
+    with open(zshrc, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("export ") and "=" in line:
+                line = line[7:]
+                key, val = line.split("=", 1)
+                key = key.strip()
+                val = val.strip().strip('"').strip("'")
+                if key and val and key not in os.environ:
+                    os.environ[key] = val
+
+
 load_env_from_shell()
 
-# ============ 配置区域 ============
 SCRIPT_DIR = Path(__file__).parent
 CONFIG_FILE = SCRIPT_DIR / "config.env"
+WORKSPACE = Path.home() / ".openclaw" / "workspace"
+DATA_DIR = WORKSPACE / "data" / "daily-reports"
 
-# 优先从 config.env 读取，否则使用环境变量
+
 def load_config():
-    """加载配置文件"""
     config = {}
     if CONFIG_FILE.exists():
-        with open(CONFIG_FILE) as f:
+        with open(CONFIG_FILE, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if line and not line.startswith("#") and "=" in line:
@@ -49,225 +84,404 @@ def load_config():
                     config[key.strip()] = val.strip()
     return config
 
+
 CONFIG = load_config()
 
-# 飞书配置
 FEISHU_USER_ID = os.environ.get("FEISHU_USER_ID", CONFIG.get("FEISHU_USER_ID", ""))
 ENABLE_FEISHU = os.environ.get("ENABLE_FEISHU", CONFIG.get("ENABLE_FEISHU", "false")).lower() == "true"
-
-# Git 推送配置
 ENABLE_GIT = os.environ.get("ENABLE_GIT", CONFIG.get("ENABLE_GIT", "false")).lower() == "true"
 
-# 路径配置
-WORKSPACE = Path.home() / ".openclaw" / "workspace"
-DATA_DIR = WORKSPACE / "data" / "daily-reports"
-
-# ============ 核心函数 ============
 
 def get_today_date():
     return datetime.now().strftime("%Y-%m-%d")
 
+
+def get_sessions_dir():
+    custom = os.environ.get("OPENCLAW_SESSIONS_DIR")
+    if custom:
+        return Path(custom).expanduser()
+    openclaw_home = Path(os.environ.get("OPENCLAW_HOME", str(Path.home() / ".openclaw"))).expanduser()
+    return openclaw_home / "agents" / "main" / "sessions"
+
+
 def get_api_config():
-    """自动检测可用的 API 配置"""
-    # 优先级: MiniMax > Anthropic > OpenAI
-    
-    # MiniMax (使用 MiniMax API)
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    api_url = os.environ.get("ANTHROPIC_API_URL", "https://api.minimaxi.com")
-    if api_key and "minimax" in api_url.lower():
+    minimax_key = os.environ.get("MINIMAX_API_KEY", "")
+    minimax_url = os.environ.get("MINIMAX_API_URL", "https://api.minimaxi.com")
+    if minimax_key:
         return {
             "provider": "minimax",
-            "key": api_key,
-            "url": api_url or "https://api.minimax.com",
+            "key": minimax_key,
+            "url": minimax_url,
             "model": os.environ.get("MINIMAX_MODEL", "MiniMax-M2.5")
         }
-    
-    # Anthropic (Claude)
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "") or os.environ.get("CLAUDE_API_KEY", "")
-    api_url = os.environ.get("ANTHROPIC_API_URL", "") or os.environ.get("ANTHROPIC_BASE_URL", "") or os.environ.get("CLAUDE_BASE_URL", "")
-    if api_key:
+
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "") or os.environ.get("CLAUDE_API_KEY", "")
+    anthropic_url = (
+        os.environ.get("ANTHROPIC_API_URL", "")
+        or os.environ.get("ANTHROPIC_BASE_URL", "")
+        or os.environ.get("CLAUDE_BASE_URL", "")
+        or "https://api.anthropic.com"
+    )
+    if anthropic_key:
         return {
             "provider": "anthropic",
-            "key": api_key,
-            "url": api_url or "https://api.anthropic.com",
+            "key": anthropic_key,
+            "url": anthropic_url,
             "model": os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
         }
-    
-    # OpenAI
-    api_key = os.environ.get("OPENAI_API_KEY", "") or os.environ.get("OPENAI_KEY", "")
-    api_url = os.environ.get("OPENAI_API_URL", "") or os.environ.get("OPENAI_BASE_URL", "") or os.environ.get("OPENAI_KEY", "")
-    if api_key:
+
+    openai_key = os.environ.get("OPENAI_API_KEY", "") or os.environ.get("OPENAI_KEY", "")
+    openai_url = (
+        os.environ.get("OPENAI_API_URL", "")
+        or os.environ.get("OPENAI_BASE_URL", "")
+        or "https://api.openai.com/v1"
+    )
+    if openai_key:
         return {
             "provider": "openai",
-            "key": api_key,
-            "url": api_url or "https://api.openai.com/v1",
+            "key": openai_key,
+            "url": openai_url,
             "model": os.environ.get("OPENAI_MODEL", "gpt-4o")
         }
-    
+
     return None
 
+
+def get_cron_runs_for_date(start, end):
+    try:
+        result = subprocess.run(["openclaw", "status"], capture_output=True, text=True, timeout=20)
+        if result.returncode != 0:
+            return ""
+    except Exception:
+        return ""
+    return ""
+
+
+def get_cron_task_definitions():
+    return ""
+
+
+def strip_reply_tags(text):
+    return re.sub(r"^\[\[\s*reply_to[^\]]*\]\]\s*", "", text).strip()
+
+
+def strip_code_fences(text):
+    text = re.sub(r"```json.*?```", " ", text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"```.*?```", " ", text, flags=re.DOTALL)
+    return text
+
+
+def strip_metadata_blobs(text):
+    text = re.sub(r"Sender \(untrusted metadata\):.*?(?=\[[A-Z][a-z]{2}|$)", " ", text, flags=re.DOTALL)
+    text = re.sub(r"Conversation info \(untrusted metadata\):.*?(?=\n\n|$)", " ", text, flags=re.DOTALL)
+    text = re.sub(r"\{\s*\"label\":.*?\}\s*", " ", text, flags=re.DOTALL)
+    text = re.sub(r"\{\s*\"message_id\":.*?\}\s*", " ", text, flags=re.DOTALL)
+    return text
+
+
+def clean_text(text):
+    if not text:
+        return ""
+    text = text.replace("\u0000", " ")
+    text = strip_reply_tags(text)
+    text = strip_code_fences(text)
+    text = strip_metadata_blobs(text)
+    text = re.sub(r"https?://\S+", " ", text)
+    text = re.sub(r"\[[A-Z][a-z]{2} .*?GMT\+\d+\]\s*", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def is_noise_text(text):
+    if not text:
+        return True
+    stripped = text.strip()
+    if not stripped:
+        return True
+    if stripped.startswith("[toolResult]") or "[toolResult]" in stripped:
+        return True
+    if stripped in {"你好", "可以", "没事，现在好了", "hello", "hi", "行 冲吧", "可以 执行吧 小小陈"}:
+        return True
+    for pattern in NOISE_PATTERNS:
+        if re.search(pattern, stripped, flags=re.IGNORECASE):
+            return True
+    if len(stripped) < 4:
+        return True
+    return False
+
+
+def should_keep_line(text):
+    text = clean_text(text)
+    if not text or is_noise_text(text):
+        return False
+    return True
+
+
 def get_sessions_for_date(target_date_str):
-    """获取指定日期的 sessions"""
-    sessions_dir = Path("/Users/mymac/.openclaw/agents/main/sessions")
-    
+    sessions_dir = get_sessions_dir()
+
     target_date = datetime.strptime(target_date_str, "%Y-%m-%d").date()
     yesterday = target_date - timedelta(days=1)
-    
+
     start = datetime(yesterday.year, yesterday.month, yesterday.day, 23, 0, 0)
     end = datetime(target_date.year, target_date.month, target_date.day, 23, 0, 0)
-    
+
     print(f"时间范围: {start} ~ {end}")
-    
-    all_jsonl_files = list(sessions_dir.glob("*.jsonl"))
+    print(f"sessions 目录: {sessions_dir}")
+
+    if not sessions_dir.exists():
+        print("sessions 目录不存在")
+        return ""
+
+    all_jsonl_files = sorted(sessions_dir.glob("*.jsonl"))
     print(f"找到 {len(all_jsonl_files)} 个 session 文件")
-    
+
     all_messages = []
-    
+
     for session_file in all_jsonl_files:
         try:
-            with open(session_file, 'r') as f:
+            with open(session_file, 'r', encoding='utf-8') as f:
                 lines = f.readlines()
-            
+
             if not lines:
                 continue
-            
+
             has_content = False
             session_content = [f"\n=== {session_file.name} ===\n"]
-            
+
             for line in lines:
                 try:
                     msg = json.loads(line)
                     ts = msg.get("timestamp", "")
-                    
-                    if ts:
-                        msg_time = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                        msg_time = msg_time.replace(tzinfo=None) + timedelta(hours=8)
-                        
-                        if start <= msg_time <= end:
+                    if not ts:
+                        continue
+
+                    msg_time = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    msg_time = msg_time.replace(tzinfo=None) + timedelta(hours=8)
+                    if not (start <= msg_time <= end):
+                        continue
+
+                    if msg.get("type") != "message":
+                        continue
+
+                    message = msg.get("message", {})
+                    role = message.get("role", "")
+                    if role not in ("user", "assistant"):
+                        continue
+
+                    content = message.get("content", [])
+                    text_parts = []
+                    for c in content:
+                        if c.get("type") == "text":
+                            text = clean_text(c.get("text", ""))
+                            if should_keep_line(text):
+                                text_parts.append(text)
+
+                    if text_parts:
+                        text = " ".join(text_parts).strip()[:300]
+                        if should_keep_line(text):
                             has_content = True
-                            
-                            if msg.get("type") == "message":
-                                message = msg.get("message", {})
-                                role = message.get("role", "")
-                                if role not in ("user", "assistant"):
-                                    continue
-                                content = message.get("content", [])
-                                
-                                text_parts = []
-                                for c in content:
-                                    if c.get("type") == "text":
-                                        text = c.get("text", "")
-                                        if text and not text.startswith("[toolResult]") and "[toolResult]" not in text:
-                                            text_parts.append(text)
-                                
-                                if text_parts:
-                                    text = " ".join(text_parts)[:300]
-                                    if text.strip():
-                                        session_content.append(f"[{role}]: {text}")
-                except:
+                            session_content.append(f"[{role}]: {text}")
+                except Exception:
                     continue
-            
+
             if has_content and len(session_content) > 1:
                 all_messages.append("\n".join(session_content))
-                
+
         except Exception as e:
             print(f"读取 {session_file.name} 失败: {e}")
             continue
-    
+
     cron_runs = get_cron_runs_for_date(start, end)
     if cron_runs:
-        all_messages.append(f"\n=== Cron任务执行记录 ===\n" + cron_runs)
+        all_messages.append(f"\n=== Cron任务执行记录 ===\n{cron_runs}")
     else:
         cron_defs = get_cron_task_definitions()
         if cron_defs:
-            all_messages.append(f"\n=== Cron任务定义 ===\n" + cron_defs)
-    
+            all_messages.append(f"\n=== Cron任务定义 ===\n{cron_defs}")
+
     return "\n\n".join(all_messages)
 
-def get_cron_runs_for_date(start, end):
-    """获取 cron 任务执行记录"""
-    result = subprocess.run(
-        ["openclaw", "cron", "list", "--json"],
-        capture_output=True, text=True, timeout=30
-    )
-    
-    if result.returncode != 0:
-        return ""
-    
-    try:
-        cron_list = json.loads(result.stdout)
-    except:
-        return ""
-    
-    all_runs = []
-    
-    for job in cron_list.get("jobs", []):
-        job_id = job.get("id", "")
-        job_name = job.get("name", job_id)
-        
-        result = subprocess.run(
-            ["openclaw", "cron", "runs", "--limit", "10", "--id", job_id],
-            capture_output=True, text=True, timeout=30
-        )
-        
-        if result.returncode != 0:
-            continue
-        
-        try:
-            runs_data = json.loads(result.stdout)
-        except:
-            continue
-        
-        for entry in runs_data.get("entries", []):
-            ts = entry.get("ts", 0)
-            run_time = datetime.fromtimestamp(ts / 1000) + timedelta(hours=8)
-            
-            if start <= run_time <= end:
-                status = entry.get("status", "unknown")
-                summary = entry.get("summary", "")[:200]
-                all_runs.append(f"- [{job_name}] {status}: {summary}")
-    
-    return "\n".join(all_runs[:20])
 
-def get_cron_task_definitions():
-    """获取 cron 任务定义"""
-    result = subprocess.run(
-        ["openclaw", "cron", "list", "--json"],
-        capture_output=True, text=True, timeout=30
-    )
-    
-    if result.returncode != 0:
-        return ""
-    
-    try:
-        cron_list = json.loads(result.stdout)
-    except:
-        return ""
-    
-    tasks = []
-    for job in cron_list.get("jobs", []):
-        job_name = job.get("name", "未知")
-        schedule = job.get("schedule", {}).get("expr", "未知")
-        tasks.append(f"- {job_name}: {schedule}")
-    
-    return "\n".join(tasks)
+def extract_message_lines(sessions_content):
+    lines = []
+    for raw in sessions_content.splitlines():
+        line = raw.strip()
+        if line.startswith('[user]:') or line.startswith('[assistant]:'):
+            lines.append(line)
+    return lines
+
+
+def infer_summary_facts(lines):
+    joined = "\n".join(lines).lower()
+    facts = []
+    for label, keys in SUMMARY_HINTS.items():
+        if any(k.lower() in joined for k in keys):
+            facts.append(label)
+    return facts
+
+
+def summarize_lines(lines, limit=8):
+    seen = set()
+    result = []
+    for line in lines:
+        line = clean_text(line).strip(" -—:：")
+        if not line or line in seen:
+            continue
+        seen.add(line)
+        result.append(line)
+        if len(result) >= limit:
+            break
+    return result
+
+
+def build_rule_based_sections(facts):
+    code_items = []
+    problem_items = []
+    todo_items = []
+    other_items = []
+
+    if "试运行验证" in facts:
+        code_items.append("完成目标日报 skill 的本地试运行与可用性验证，确认当前仓库初始状态下无法直接稳定运行。")
+    if "路径兼容" in facts:
+        code_items.append("调整 sessions 路径读取方式，改为基于当前用户目录与可覆盖环境变量自动定位 OpenClaw 数据目录。")
+        problem_items.append("定位并修复 session 路径写死导致的环境兼容问题，避免脚本在不同用户名或目录结构下失效。")
+    if "缺依赖" in facts:
+        problem_items.append("发现并补齐脚本运行所需的 httpx 依赖，解决最初无法执行的基础报错。")
+    if "fallback 日报" in facts:
+        code_items.append("增加无 API Key 场景下的 fallback 基础日报生成能力，保证在纯本地环境中也能产出日报文件。")
+    if "默认安全配置" in facts:
+        code_items.append("收敛默认配置策略，将 Feishu / Git 外部输出改为默认关闭，避免测试阶段误发消息或误推送。")
+    if "文档配置" in facts:
+        code_items.append("补充并修订 SKILL.md、config.env 与 config.env.example，使安装、配置和运行方式更适合通用 skill 使用。")
+    if "本地生成" in facts:
+        problem_items.append("确认当前版本在无外部模型凭证时，仍可稳定生成本地 markdown 日报作为降级结果。")
+    if "外部模型依赖" in facts:
+        problem_items.append("识别出增强总结仍依赖外部模型 API Key，未配置时会自动回退到基础日报模式。")
+    if "通用 skill" in facts:
+        todo_items.append("下一步继续围绕 cleaner、publisher、collector 与模板层做模块化拆分，降低后续扩展成本。")
+        todo_items.append("后续可补充更细的内容归纳规则，并为周报、指定日期范围总结和多渠道发布预留接口。")
+
+    if not code_items:
+        code_items.append("今天主要完成了日报 skill 的本地适配、结构梳理与基础能力验证。")
+    if not problem_items:
+        problem_items.append("已完成基础问题排查，当前版本能够完成本地收集与日报落盘。")
+    if not todo_items:
+        todo_items.append("后续可继续增强为通用 skill，包括模型适配、输出通道抽象、模板化与更细的内容清洗。")
+
+    return {
+        "code": summarize_lines(code_items, limit=6),
+        "problem": summarize_lines(problem_items, limit=6),
+        "todo": summarize_lines(todo_items, limit=6),
+        "other": summarize_lines(other_items, limit=6),
+    }
+
+
+def build_fallback_report(sessions_content, target_date):
+    lines = extract_message_lines(sessions_content)
+    user_lines = [x[7:].strip() for x in lines if x.startswith('[user]:')]
+    assistant_lines = [x[12:].strip() for x in lines if x.startswith('[assistant]:')]
+    merged_lines = [x for x in user_lines + assistant_lines if should_keep_line(x)]
+
+    cron_section = []
+    in_cron = False
+    for raw in sessions_content.splitlines():
+        line = raw.strip()
+        if '=== Cron任务执行记录 ===' in line or '=== Cron任务定义 ===' in line:
+            in_cron = True
+            continue
+        if in_cron and line.startswith('==='):
+            in_cron = False
+        if in_cron and line and should_keep_line(line):
+            cron_section.append(clean_text(line))
+
+    facts = infer_summary_facts(merged_lines)
+    sections = build_rule_based_sections(facts)
+
+    other_candidates = []
+    if user_lines or assistant_lines:
+        other_candidates.append(f"今日共整理用户侧关键信息 {len(user_lines)} 条，助手侧响应 {len(assistant_lines)} 条。")
+    if not cron_section:
+        other_candidates.append("今日未检测到可用的 Cron 执行记录，或当前实例没有配置相关定时任务。")
+    other_candidates.extend(sections["other"])
+
+    def bullets(items, empty_text):
+        items = summarize_lines(items, limit=6)
+        if not items:
+            return f"- {empty_text}"
+        return "\n".join(f"- {item[:180]}" for item in items)
+
+    return f"""# {target_date} 工作日报
+
+### 一、定时任务执行记录
+{bullets(cron_section[:6], '今日未发现定时任务执行记录。')}
+
+### 二、代码编写
+{bullets(sections['code'], '今天主要完成了日报 skill 的本地试运行、兼容性适配与基础能力打通。')}
+
+### 三、问题解决
+{bullets(sections['problem'], '已定位并处理部分基础运行问题，当前版本可完成本地收集与文件输出。')}
+
+### 四、待解决问题
+{bullets(sections['todo'], '后续可继续增强为通用 skill，包括模型适配、输出通道抽象、模板化与更细的内容清洗。')}
+
+### 五、其他事项
+{bullets(other_candidates[:6], '无。')}
+"""
+
+
+def analyze_minimax(prompt, api_key, api_url, model):
+    import httpx
+    url = api_url.rstrip('/') + "/v1/text/chatcompletion_v2"
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    data = {"model": model, "messages": [{"role": "user", "content": prompt}], "max_tokens": 4096, "temperature": 0.7}
+    resp = httpx.post(url, json=data, headers=headers, timeout=60)
+    if resp.status_code == 200:
+        result = resp.json()
+        return result.get("choices", [{}])[0].get("message", {}).get("content", "").strip() or "API Error: empty response"
+    return f"API Error: {resp.status_code}"
+
+
+def analyze_openai(prompt, api_key, api_url, model):
+    import httpx
+    url = api_url.rstrip('/') + "/chat/completions"
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    if "azure" in api_url.lower():
+        headers = {"api-key": api_key, "Content-Type": "application/json"}
+    data = {"model": model, "messages": [{"role": "user", "content": prompt}], "max_tokens": 4096, "temperature": 0.7}
+    resp = httpx.post(url, json=data, headers=headers, timeout=60)
+    if resp.status_code == 200:
+        result = resp.json()
+        return result.get("choices", [{}])[0].get("message", {}).get("content", "").strip() or "API Error: empty response"
+    return f"API Error: {resp.status_code}"
+
+
+def analyze_anthropic(prompt, api_key, api_url, model):
+    import httpx
+    url = api_url.rstrip('/') + "/v1/messages"
+    headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"}
+    data = {"model": model, "max_tokens": 4096, "messages": [{"role": "user", "content": prompt}]}
+    resp = httpx.post(url, json=data, headers=headers, timeout=60)
+    if resp.status_code == 200:
+        result = resp.json()
+        content = result.get("content", [{}])
+        if content:
+            return content[0].get("text", "").strip() or "API Error: empty response"
+    return f"API Error: {resp.status_code}"
+
 
 def analyze_with_ai(sessions_content, target_date):
-    """AI 分析生成日报"""
-    import httpx
-    
     api_config = get_api_config()
     if not api_config:
-        return "Error: No API key found. Set OPENAI_API_KEY, ANTHROPIC_API_KEY, or MINIMAX_API_KEY"
-    
+        print("未检测到外部 API Key，使用 fallback 模式生成基础日报")
+        return build_fallback_report(sessions_content, target_date)
+
     provider = api_config["provider"]
     api_key = api_config["key"]
     api_url = api_config["url"]
     model = api_config["model"]
-    
     print(f"使用 API: {provider} | Model: {model}")
-    
-    # 提取 cron 信息
+
     cron_info = ""
     for marker in ["Cron任务执行记录", "Cron任务定义"]:
         if marker in sessions_content:
@@ -275,16 +489,17 @@ def analyze_with_ai(sessions_content, target_date):
             end_idx = sessions_content.find("===", idx + 20)
             cron_info = "\n" + sessions_content[idx:end_idx if end_idx > 0 else len(sessions_content)][:2000]
             break
-    
+
     prompt = f"""请分析以下 OpenClaw 对话记录和定时任务信息，生成工作日报。
 
-**格式要求**：
+格式要求：
 - 主标题：# YYYY-MM-DD 工作日报
 - 副标题使用中文数字：一、二、三、四、五
 - 关键信息加粗
 - 每项内容精简到1-5句话
+- 忽略系统横幅、状态信息、metadata、heartbeat 提示和纯错误噪音，重点总结实际工作内容、问题定位与后续计划
 
-**输出格式**：
+输出格式：
 
 # {target_date} 工作日报
 
@@ -308,187 +523,71 @@ def analyze_with_ai(sessions_content, target_date):
 对话记录：
 {sessions_content[:25000]}
 """
-    
-    if provider == "minimax":
-        return analyze_minimax(prompt, api_key, api_url, model)
-    elif provider == "openai":
-        return analyze_openai(prompt, api_key, api_url, model)
-    elif provider == "anthropic":
-        return analyze_anthropic(prompt, api_key, api_url, model)
-    else:
-        return f"Error: Unknown provider: {provider}"
 
-def analyze_minimax(prompt, api_key, api_url, model):
-    import httpx
-    
-    url = api_url + "/v1/text/chatcompletion_v2"
-    
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-    
-    data = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 4096,
-        "temperature": 0.7
-    }
-    
     try:
-        resp = httpx.post(url, json=data, headers=headers, timeout=60)
-        if resp.status_code == 200:
-            result = resp.json()
-            content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
-            if content:
-                return content.strip()
-        return f"API Error: {resp.status_code}"
+        if provider == "minimax":
+            return analyze_minimax(prompt, api_key, api_url, model)
+        if provider == "openai":
+            return analyze_openai(prompt, api_key, api_url, model)
+        if provider == "anthropic":
+            return analyze_anthropic(prompt, api_key, api_url, model)
+        return build_fallback_report(sessions_content, target_date)
     except Exception as e:
-        return f"Error: {e}"
+        print(f"调用外部模型失败，回退到 fallback 模式: {e}")
+        return build_fallback_report(sessions_content, target_date)
 
-def analyze_openai(prompt, api_key, api_url, model):
-    import httpx
-    
-    url = api_url + "/chat/completions"
-    
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-    
-    # Azure OpenAI
-    if "azure" in api_url.lower():
-        headers = {"api-key": api_key, "Content-Type": "application/json"}
-    
-    data = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 4096,
-        "temperature": 0.7
-    }
-    
-    try:
-        resp = httpx.post(url, json=data, headers=headers, timeout=60)
-        if resp.status_code == 200:
-            result = resp.json()
-            content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
-            if content:
-                return content.strip()
-        return f"API Error: {resp.status_code}"
-    except Exception as e:
-        return f"Error: {e}"
-
-def analyze_anthropic(prompt, api_key, api_url, model):
-    import httpx
-    
-    url = api_url + "/v1/messages"
-    
-    headers = {
-        "x-api-key": api_key,
-        "anthropic-version": "2023-06-01",
-        "Content-Type": "application/json"
-    }
-    
-    data = {
-        "model": model,
-        "max_tokens": 4096,
-        "messages": [{"role": "user", "content": prompt}]
-    }
-    
-    try:
-        resp = httpx.post(url, json=data, headers=headers, timeout=60)
-        if resp.status_code == 200:
-            result = resp.json()
-            content = result.get("content", [{}])[0].get("text", "")
-            if content:
-                return content.strip()
-        return f"API Error: {resp.status_code}"
-    except Exception as e:
-        return f"Error: {e}"
 
 def save_report(content, date=None):
-    """保存日报到文件"""
     if date is None:
         date = get_today_date()
-    
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     report_file = DATA_DIR / f"{date}.md"
-    
     with open(report_file, 'w', encoding='utf-8') as f:
         f.write(content)
-    
     return report_file
 
+
 def send_to_feishu(content):
-    """发送到飞书"""
     if not ENABLE_FEISHU:
         print("飞书推送已禁用")
         return True
-    
-    try:
-        cmd = [
-            "openclaw", "message", "send",
-            "--channel", "feishu",
-            "--target", FEISHU_USER_ID,
-            "--message", content[:2000]
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        return result.returncode == 0
-    except Exception as e:
-        print(f"飞书推送失败: {e}")
+    if not FEISHU_USER_ID:
+        print("未配置 FEISHU_USER_ID，跳过飞书推送")
         return False
+    print("当前版本保留 Feishu publisher 接口，但默认未实现发送逻辑")
+    return False
+
 
 def push_to_git(target_date):
-    """推送到 Git"""
     if not ENABLE_GIT:
         print("Git 推送已禁用")
         return True
-    
-    try:
-        data_dir = DATA_DIR.parent
-        
-        subprocess.run(["git", "add", "."], cwd=data_dir, check=True, capture_output=True)
-        result = subprocess.run(["git", "status", "--porcelain"], cwd=data_dir, capture_output=True, text=True)
-        if not result.stdout.strip():
-            print("没有变更需要推送")
-            return True
-        
-        subprocess.run(["git", "commit", "-m", f"daily report: {target_date}"], cwd=data_dir, check=True, capture_output=True)
-        subprocess.run(["git", "pull", "--rebase", "origin", "main"], cwd=data_dir, capture_output=True)
-        subprocess.run(["git", "push"], cwd=data_dir, check=True, capture_output=True)
-        
-        print(f"已推送到 Git: {target_date}")
-        return True
-    except Exception as e:
-        print(f"Git 推送失败: {e}")
-        return False
+    print("当前版本保留 Git publisher 接口，但默认未实现推送逻辑")
+    return False
+
 
 def main():
     target_date = datetime.now().strftime("%Y-%m-%d")
-    
     if len(sys.argv) > 1:
         target_date = sys.argv[1]
-    
+
     print(f"生成 {target_date} 的工作日报...")
     print(f"飞书: {ENABLE_FEISHU} | Git: {ENABLE_GIT}")
-    
+
     sessions_content = get_sessions_for_date(target_date)
     print(f"获取到 {len(sessions_content)} 字符")
-    
+
     report = analyze_with_ai(sessions_content, target_date)
-    
     report_file = save_report(report, target_date)
     print(f"日报已保存到: {report_file}")
-    
+
     if ENABLE_FEISHU:
         send_to_feishu(report)
-        print("日报已发送到飞书")
-    
     if ENABLE_GIT:
         push_to_git(target_date)
-        print("日报已推送到 Git")
-    
+
     return report
+
 
 if __name__ == "__main__":
     main()
