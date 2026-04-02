@@ -6,6 +6,7 @@
 - 支持外部 LLM（OpenAI / Anthropic / MiniMax）增强总结
 - 无 API Key 时自动 fallback 到规则化日报
 - 支持 Feishu 直接推送全文
+- 支持 DingTalk 直接推送全文
 - 支持生成微信端“主动询问式获取全文”的提示文案
 """
 
@@ -95,6 +96,9 @@ ENABLE_GIT = os.environ.get("ENABLE_GIT", CONFIG.get("ENABLE_GIT", "false")).low
 WECHAT_QUERY_HINT_ENABLED = os.environ.get("WECHAT_QUERY_HINT_ENABLED", CONFIG.get("WECHAT_QUERY_HINT_ENABLED", "true")).lower() == "true"
 WECHAT_QUERY_COMMAND = os.environ.get("WECHAT_QUERY_COMMAND", CONFIG.get("WECHAT_QUERY_COMMAND", "日报")).strip() or "日报"
 FEISHU_WEBHOOK_URL = os.environ.get("FEISHU_WEBHOOK_URL", CONFIG.get("FEISHU_WEBHOOK_URL", "")).strip()
+ENABLE_DINGTALK = os.environ.get("ENABLE_DINGTALK", CONFIG.get("ENABLE_DINGTALK", "false")).lower() == "true"
+DINGTALK_WEBHOOK_URL = os.environ.get("DINGTALK_WEBHOOK_URL", CONFIG.get("DINGTALK_WEBHOOK_URL", "")).strip()
+DINGTALK_KEYWORD = os.environ.get("DINGTALK_KEYWORD", CONFIG.get("DINGTALK_KEYWORD", "日报")).strip() or "日报"
 
 
 def get_today_date():
@@ -563,19 +567,25 @@ def save_report(content, date=None):
     return report_file
 
 
+def send_json_post(url, payload):
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = request.Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
+    with request.urlopen(req, timeout=20) as resp:
+        body = resp.read().decode("utf-8", errors="ignore")
+        return resp.status, body
+
+
 def send_to_feishu(content, target_date):
     if not ENABLE_FEISHU:
         print("飞书推送已禁用")
         return True
 
     if FEISHU_WEBHOOK_URL:
-        payload = json.dumps({"msg_type": "text", "content": {"text": content}}, ensure_ascii=False).encode("utf-8")
-        req = request.Request(FEISHU_WEBHOOK_URL, data=payload, headers={"Content-Type": "application/json"}, method="POST")
+        payload = {"msg_type": "text", "content": {"text": content}}
         try:
-            with request.urlopen(req, timeout=20) as resp:
-                body = resp.read().decode("utf-8", errors="ignore")
-                print(f"飞书 webhook 推送成功: HTTP {resp.status} | {body[:300]}")
-                return True
+            status, body = send_json_post(FEISHU_WEBHOOK_URL, payload)
+            print(f"飞书 webhook 推送成功: HTTP {status} | {body[:300]}")
+            return True
         except error.HTTPError as e:
             body = e.read().decode("utf-8", errors="ignore") if hasattr(e, 'read') else ''
             print(f"飞书 webhook 推送失败: HTTP {e.code} | {body[:300]}")
@@ -590,6 +600,34 @@ def send_to_feishu(content, target_date):
 
     print("已启用 Feishu 推送，但未配置 FEISHU_WEBHOOK_URL 或 FEISHU_USER_ID，跳过发送")
     return False
+
+
+def send_to_dingtalk(content, target_date):
+    if not ENABLE_DINGTALK:
+        print("钉钉推送已禁用")
+        return True
+
+    if not DINGTALK_WEBHOOK_URL:
+        print("已启用钉钉推送，但未配置 DINGTALK_WEBHOOK_URL，跳过发送")
+        return False
+
+    final_text = content
+    if DINGTALK_KEYWORD and DINGTALK_KEYWORD not in final_text:
+        final_text = f"{DINGTALK_KEYWORD}\n{final_text}"
+
+    payload = {"msgtype": "text", "text": {"content": final_text}}
+    try:
+        status, body = send_json_post(DINGTALK_WEBHOOK_URL, payload)
+        print(f"钉钉 webhook 推送结果: HTTP {status} | {body[:300]}")
+        parsed = json.loads(body)
+        return parsed.get("errcode") == 0
+    except error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="ignore") if hasattr(e, 'read') else ''
+        print(f"钉钉 webhook 推送失败: HTTP {e.code} | {body[:300]}")
+        return False
+    except Exception as e:
+        print(f"钉钉 webhook 推送失败: {e}")
+        return False
 
 
 def build_wechat_query_message(target_date, report_file):
@@ -614,7 +652,9 @@ def main():
         target_date = sys.argv[1]
 
     print(f"生成 {target_date} 的工作日报...")
-    print(f"飞书: {ENABLE_FEISHU} | Git: {ENABLE_GIT} | 微信主动询问提示: {WECHAT_QUERY_HINT_ENABLED}")
+    print(
+        f"飞书: {ENABLE_FEISHU} | 钉钉: {ENABLE_DINGTALK} | Git: {ENABLE_GIT} | 微信主动询问提示: {WECHAT_QUERY_HINT_ENABLED}"
+    )
 
     sessions_content = get_sessions_for_date(target_date)
     print(f"获取到 {len(sessions_content)} 字符")
@@ -627,6 +667,9 @@ def main():
 
     if ENABLE_FEISHU:
         send_to_feishu(report_with_hint, target_date)
+
+    if ENABLE_DINGTALK:
+        send_to_dingtalk(report_with_hint, target_date)
 
     print("微信端建议提示：")
     print(build_wechat_query_message(target_date, report_file))

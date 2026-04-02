@@ -4,7 +4,7 @@
 
 ## 做了什么
 
-这个仓库提供两类能力：
+这个仓库提供三类能力：
 
 1. **生成日报**
    - 从本地 OpenClaw sessions 读取对话内容
@@ -12,13 +12,18 @@
    - 支持无 API Key fallback
    - 支持 OpenAI / Anthropic / MiniMax 增强总结
 
-2. **多端接入**
+2. **多端推送**
    - **飞书**：支持直接推送日报全文
-   - **微信**：支持用户主动发送口令后，读取本地日报全文返回
+   - **钉钉**：支持直接推送日报全文
+
+3. **微信查询**
+   - 用户主动发送“日报 / 今日日报 / 昨天日报”等口令
+   - 读取本地日报全文返回
+   - 如果当天日报不存在，会自动先生成再返回
 
 核心原则是：
 
-> **日报分析在本地完成，渠道只负责分发或查询结果。**
+> **日报分析在本地完成，渠道只负责推送或查询结果。**
 
 ---
 
@@ -64,17 +69,11 @@ python3 scripts/query_report.py yesterday
 python3 scripts/query_report.py 2026-04-01
 ```
 
-这个脚本的作用就是：
-
-> **把本地已经生成好的日报全文输出出来，方便微信等通道在用户主动查询时直接返回。**
-
 ---
 
 ## 怎么接入
 
 ### 方案一：只本地生成
-
-适合只想先把日报跑起来的人。
 
 ```bash
 python3 -m pip install --user -r requirements.txt
@@ -86,11 +85,17 @@ python3 scripts/daily_report.py
 
 ### 方案二：接飞书全文推送
 
-配置：
+在本地创建并编辑：
+
+```bash
+scripts/config.env
+```
+
+填入：
 
 ```env
 ENABLE_FEISHU=true
-FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/xxxx
+FEISHU_WEBHOOK_URL=你的飞书机器人 webhook
 ```
 
 然后运行：
@@ -105,7 +110,39 @@ python3 scripts/daily_report.py
 
 ---
 
-### 方案三：接微信主动查询
+### 方案三：接钉钉全文推送
+
+在本地创建并编辑：
+
+```bash
+scripts/config.env
+```
+
+填入：
+
+```env
+ENABLE_DINGTALK=true
+DINGTALK_WEBHOOK_URL=你的钉钉机器人 webhook
+DINGTALK_KEYWORD=日报
+```
+
+说明：
+- 如果钉钉机器人启用了关键词校验，`DINGTALK_KEYWORD` 必须和机器人配置一致
+- 脚本会自动把关键词补到消息正文里，避免被钉钉拦截
+
+然后运行：
+
+```bash
+python3 scripts/daily_report.py
+```
+
+执行后：
+- 本地会生成日报文件
+- 钉钉机器人会直接收到全文
+
+---
+
+### 方案四：接微信主动查询
 
 推荐方式：
 
@@ -117,25 +154,18 @@ python3 scripts/daily_report.py
 python3 ~/.openclaw/workspace/skills/daily-report/scripts/query_report.py today
 ```
 
-如果你想查昨天：
+这个查询脚本支持更自然的说法：
 
-```bash
-python3 ~/.openclaw/workspace/skills/daily-report/scripts/query_report.py yesterday
-```
+- `日报`
+- `今日日报`
+- `今天日报`
+- `昨天日报`
+- `昨日报`
+- `昨日日报`
 
-如果想查指定日期：
-
-```bash
-python3 ~/.openclaw/workspace/skills/daily-report/scripts/query_report.py 2026-04-01
-```
-
-这样微信通道不需要主动推送，只需要：
-
-- 用户发查询口令
-- 机器人执行查询脚本
-- 直接把 stdout 返回给用户
-
-这是当前更稳的接入方式。
+并且：
+- 如果当天日报已经存在 → 直接返回全文
+- 如果当天日报不存在 → 先自动生成，再返回全文
 
 ---
 
@@ -150,12 +180,12 @@ python3 ~/.openclaw/workspace/skills/daily-report/scripts/query_report.py 2026-0
 所以正确的结构应该是：
 
 - **本地负责生成结果**
-- **飞书负责主动接收结果**
+- **飞书 / 钉钉负责主动接收结果**
 - **微信负责按需查询结果**
 
 这样能保证：
 
-- 飞书和微信看到的是同一份日报
+- 多个端拿到的是同一份日报
 - 不需要在每个通道重复跑总结逻辑
 - 微信链路不稳定时，仍然能稳定获取全文
 
@@ -173,6 +203,7 @@ cp scripts/config.env.example scripts/config.env
 
 ```env
 ENABLE_FEISHU=false
+ENABLE_DINGTALK=false
 ENABLE_GIT=false
 WECHAT_QUERY_HINT_ENABLED=true
 WECHAT_QUERY_COMMAND=日报
@@ -215,6 +246,7 @@ python3 scripts/query_report.py yesterday
 - 本地日报生成
 - AI 增强总结
 - Feishu webhook 全文推送
+- DingTalk webhook 全文推送
 - 微信查询脚本入口
 - 配置示例
 
@@ -228,4 +260,4 @@ python3 scripts/query_report.py yesterday
 
 ## 一句话总结
 
-> 这是一个本地生成日报、支持飞书直接推送全文，并支持微信通过主动查询返回本地日报全文的 OpenClaw skill。
+> 这是一个本地生成日报、支持飞书和钉钉直接推送全文，并支持微信通过主动查询返回本地日报全文的 OpenClaw skill。
