@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-读取本地已生成的日报全文。
+读取本地已生成的日报全文；如果日报不存在，则自动先生成再返回。
 用途：
 - 微信等不适合主动推送全文的通道，可在用户主动发送“日报”时调用本脚本
 - 输出指定日期或今天的日报全文
 """
 
+import subprocess
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
 WORKSPACE = Path.home() / ".openclaw" / "workspace"
 DATA_DIR = WORKSPACE / "data" / "daily-reports"
+SCRIPT_DIR = Path(__file__).parent
+GENERATOR = SCRIPT_DIR / "daily_report.py"
 
 
 def normalize_date_arg(arg):
@@ -23,10 +26,24 @@ def normalize_date_arg(arg):
     return arg
 
 
-def read_report(date_str):
+def ensure_report_exists(date_str):
     report_file = DATA_DIR / f"{date_str}.md"
+    if report_file.exists():
+        return report_file
+
+    subprocess.run(
+        ["python3", str(GENERATOR), date_str],
+        check=True,
+        cwd=str(WORKSPACE),
+    )
+
     if not report_file.exists():
-        raise FileNotFoundError(f"未找到 {date_str} 的日报：{report_file}")
+        raise FileNotFoundError(f"日报生成完成后仍未找到文件：{report_file}")
+    return report_file
+
+
+def read_report(date_str):
+    report_file = ensure_report_exists(date_str)
     return report_file, report_file.read_text(encoding="utf-8")
 
 
