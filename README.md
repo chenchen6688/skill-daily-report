@@ -108,6 +108,27 @@ python3 scripts/daily_report.py
 - 本地会生成日报文件
 - 飞书 webhook 会直接收到全文
 
+如果你要做自动化，推荐把默认推送时间也写进本地配置：
+
+```env
+AUTOMATION_TIME=19:00
+AUTOMATION_TZ=Asia/Shanghai
+```
+
+这样不同用户可以按自己的习惯改成：
+
+```env
+AUTOMATION_TIME=18:30
+AUTOMATION_TZ=Asia/Shanghai
+```
+
+或者：
+
+```env
+AUTOMATION_TIME=21:00
+AUTOMATION_TZ=Asia/Shanghai
+```
+
 ---
 
 ### 方案三：接钉钉全文推送
@@ -166,6 +187,41 @@ python3 ~/.openclaw/workspace/skills/daily-report/scripts/query_report.py today
 并且：
 - 如果当天日报已经存在 → 直接返回全文
 - 如果当天日报不存在 → 先自动生成，再返回全文
+
+---
+
+## 自动化时间如何配置
+
+这个仓库本身负责：
+- 生成日报
+- 推送飞书 / 钉钉
+- 提供微信查询入口
+
+**真正的定时执行建议交给 OpenClaw cron。**
+
+推荐做法是：
+
+1. 在本地 `scripts/config.env` 里写入你希望的默认时间
+
+```env
+AUTOMATION_TIME=19:00
+AUTOMATION_TZ=Asia/Shanghai
+```
+
+2. 创建 OpenClaw cron 时，读取这个时间并转换成对应的 cron 表达式
+
+例如：
+- `19:00` → `0 19 * * *`
+- `18:30` → `30 18 * * *`
+
+也就是说，这个项目现在支持的是：
+
+> **自动化时间可配置，但调度本身由 OpenClaw cron 承担。**
+
+这样做的好处是：
+- 不同用户可以保留自己的推送时间
+- skill 仓库本身不需要硬编码某个固定时间
+- 飞书 / 钉钉 / 微信逻辑不受影响
 
 ---
 
