@@ -17,11 +17,19 @@ DATA_DIR = WORKSPACE / "data" / "daily-reports"
 SCRIPT_DIR = Path(__file__).parent
 GENERATOR = SCRIPT_DIR / "daily_report.py"
 
+TODAY_ALIASES = {
+    "today", "今日", "今天", "日报", "今日日报", "今天日报", "本日报", "本日总结"
+}
+YESTERDAY_ALIASES = {
+    "yesterday", "昨日", "昨天", "昨日报", "昨天日报", "昨日日报"
+}
+
 
 def normalize_date_arg(arg):
-    if not arg or arg in {"today", "今日", "今天", "日报"}:
+    normalized = (arg or "").strip().lower()
+    if not normalized or normalized in TODAY_ALIASES:
         return datetime.now().strftime("%Y-%m-%d")
-    if arg in {"yesterday", "昨日", "昨天"}:
+    if normalized in YESTERDAY_ALIASES:
         return (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     return arg
 
