@@ -142,6 +142,12 @@ cp scripts/config.env.example scripts/config.env
 
 说明：以上命令需要在 `daily-report` 项目目录内执行。
 
+复制完成后，可以直接用下面这条命令打开配置文件进行编辑：
+
+```bash
+open -e scripts/config.env
+```
+
 ### 第三步：直接运行
 
 ```bash
@@ -159,6 +165,12 @@ cp scripts/config.env.example scripts/config.env
 ```
 
 说明：以上命令需要在 `daily-report` 项目目录内执行。
+
+复制完成后，可以直接用下面这条命令打开配置文件进行编辑：
+
+```bash
+open -e scripts/config.env
+```
 
 ### 第二步：编辑本地配置
 
@@ -196,6 +208,12 @@ cp scripts/config.env.example scripts/config.env
 ```
 
 说明：以上命令需要在 `daily-report` 项目目录内执行。
+
+复制完成后，可以直接用下面这条命令打开配置文件进行编辑：
+
+```bash
+open -e scripts/config.env
+```
 
 ### 第二步：编辑本地配置
 
@@ -270,6 +288,12 @@ cp scripts/config.env.example scripts/config.env
 ```
 
 说明：以上命令需要在 `daily-report` 项目目录内执行。
+
+复制完成后，可以直接用下面这条命令打开配置文件进行编辑：
+
+```bash
+open -e scripts/config.env
+```
 
 ### 第二步：编辑本地配置
 
