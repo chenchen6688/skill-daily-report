@@ -71,6 +71,19 @@ DINGTALK_WEBHOOK_URL=你的钉钉机器人 webhook
 DINGTALK_KEYWORD=日报
 ```
 
+自动化示例：
+
+```env
+AUTOMATION_TIME=19:00
+AUTOMATION_TZ=Asia/Shanghai
+```
+
+然后运行：
+
+```bash
+python3 ~/.openclaw/workspace/skills/daily-report/scripts/setup_cron.py
+```
+
 ## 说明
 
 - 日报分析总结在**本地**完成

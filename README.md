@@ -267,6 +267,45 @@ WECHAT_QUERY_COMMAND=日报
 
 ---
 
+## 自动创建 / 更新定时任务
+
+如果你希望根据 `config.env` 里的时间自动配置 OpenClaw cron，可以直接运行：
+
+```bash
+python3 scripts/setup_cron.py
+```
+
+这个脚本会：
+- 读取 `AUTOMATION_TIME`
+- 读取 `AUTOMATION_TZ`
+- 检查是否启用了飞书 / 钉钉
+- 自动创建或更新一个名为：
+
+```text
+daily-report-auto-delivery
+```
+
+的 OpenClaw cron 任务
+
+例如：
+
+```env
+AUTOMATION_TIME=19:00
+AUTOMATION_TZ=Asia/Shanghai
+ENABLE_FEISHU=true
+ENABLE_DINGTALK=true
+```
+
+运行：
+
+```bash
+python3 scripts/setup_cron.py
+```
+
+就会自动生成一个每天 19:00 执行的日报推送任务。
+
+---
+
 ## 常见用法
 
 ### 生成今天日报
