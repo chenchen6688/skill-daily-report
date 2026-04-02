@@ -134,11 +134,13 @@ daily-report-auto-delivery
 python3 -m pip install --user -r requirements.txt
 ```
 
-### 第二步：复制配置文件
+### 第二步：在 **daily-report 项目目录下** 复制配置文件
 
 ```bash
 cp scripts/config.env.example scripts/config.env
 ```
+
+说明：以上命令需要在 `daily-report` 项目目录内执行。
 
 ### 第三步：直接运行
 
@@ -150,11 +152,13 @@ python3 scripts/daily_report.py
 
 ## 方案 B：飞书全文推送
 
-### 第一步：复制配置文件
+### 第一步：在 **daily-report 项目目录下** 复制配置文件
 
 ```bash
 cp scripts/config.env.example scripts/config.env
 ```
+
+说明：以上命令需要在 `daily-report` 项目目录内执行。
 
 ### 第二步：编辑本地配置
 
@@ -185,11 +189,13 @@ python3 scripts/daily_report.py
 
 ## 方案 C：钉钉全文推送
 
-### 第一步：复制配置文件
+### 第一步：在 **daily-report 项目目录下** 复制配置文件
 
 ```bash
 cp scripts/config.env.example scripts/config.env
 ```
+
+说明：以上命令需要在 `daily-report` 项目目录内执行。
 
 ### 第二步：编辑本地配置
 
@@ -257,11 +263,13 @@ python3 ~/.openclaw/workspace/skills/daily-report/scripts/query_report.py 2026-0
 
 这是最完整的使用方式。
 
-### 第一步：复制配置文件
+### 第一步：在 **daily-report 项目目录下** 复制配置文件
 
 ```bash
 cp scripts/config.env.example scripts/config.env
 ```
+
+说明：以上命令需要在 `daily-report` 项目目录内执行。
 
 ### 第二步：编辑本地配置
 
