@@ -1,182 +1,40 @@
 # skill-daily-report
 
-一个基于 **OpenClaw 本地会话数据** 生成日报的 skill。
+一个基于 **OpenClaw 本地会话数据** 生成日报的 skill，支持多端分发：
 
-## 做了什么
+- **飞书**：直接推送日报全文
+- **钉钉**：直接推送日报全文
+- **微信**：通过主动查询返回日报全文
 
-这个仓库提供三类能力：
-
-1. **生成日报**
-   - 从本地 OpenClaw sessions 读取对话内容
-   - 自动整理为 markdown 日报
-   - 支持无 API Key fallback
-   - 支持 OpenAI / Anthropic / MiniMax 增强总结
-
-2. **多端推送**
-   - **飞书**：支持直接推送日报全文
-   - **钉钉**：支持直接推送日报全文
-
-3. **微信查询**
-   - 用户主动发送“日报 / 今日日报 / 昨天日报”等口令
-   - 读取本地日报全文返回
-   - 如果当天日报不存在，会自动先生成再返回
-
-核心原则是：
+核心原则：
 
 > **日报分析在本地完成，渠道只负责推送或查询结果。**
 
 ---
 
-## 仓库里有哪些入口
+# 一、这个项目能做什么
 
-### 1）生成日报
+这个仓库提供四类能力：
 
-```bash
-python3 scripts/daily_report.py
-```
+## 1）本地生成日报
 
-指定日期：
+从 OpenClaw 本地 sessions 提取对话内容，自动整理为 markdown 日报。
 
-```bash
-python3 scripts/daily_report.py 2026-04-01
-```
+支持：
+- 无 API Key fallback
+- OpenAI / Anthropic / MiniMax 增强总结
 
-生成结果保存到：
+## 2）飞书推送日报全文
 
-```bash
-~/.openclaw/workspace/data/daily-reports/YYYY-MM-DD.md
-```
+生成日报后，可直接通过飞书 webhook 把全文推送出去。
 
----
+## 3）钉钉推送日报全文
 
-### 2）读取日报全文（给微信等通道接入）
+生成日报后，可直接通过钉钉机器人 webhook 把全文推送出去。
 
-读取今天的日报：
+## 4）微信主动查询日报全文
 
-```bash
-python3 scripts/query_report.py today
-```
-
-读取昨天的日报：
-
-```bash
-python3 scripts/query_report.py yesterday
-```
-
-读取指定日期：
-
-```bash
-python3 scripts/query_report.py 2026-04-01
-```
-
----
-
-## 怎么接入
-
-### 方案一：只本地生成
-
-```bash
-python3 -m pip install --user -r requirements.txt
-cp scripts/config.env.example scripts/config.env
-python3 scripts/daily_report.py
-```
-
----
-
-### 方案二：接飞书全文推送
-
-在本地创建并编辑：
-
-```bash
-scripts/config.env
-```
-
-填入：
-
-```env
-ENABLE_FEISHU=true
-FEISHU_WEBHOOK_URL=你的飞书机器人 webhook
-```
-
-然后运行：
-
-```bash
-python3 scripts/daily_report.py
-```
-
-执行后：
-- 本地会生成日报文件
-- 飞书 webhook 会直接收到全文
-
-如果你要做自动化，推荐把默认推送时间也写进本地配置：
-
-```env
-AUTOMATION_TIME=19:00
-AUTOMATION_TZ=Asia/Shanghai
-```
-
-这样不同用户可以按自己的习惯改成：
-
-```env
-AUTOMATION_TIME=18:30
-AUTOMATION_TZ=Asia/Shanghai
-```
-
-或者：
-
-```env
-AUTOMATION_TIME=21:00
-AUTOMATION_TZ=Asia/Shanghai
-```
-
----
-
-### 方案三：接钉钉全文推送
-
-在本地创建并编辑：
-
-```bash
-scripts/config.env
-```
-
-填入：
-
-```env
-ENABLE_DINGTALK=true
-DINGTALK_WEBHOOK_URL=你的钉钉机器人 webhook
-DINGTALK_KEYWORD=日报
-```
-
-说明：
-- 如果钉钉机器人启用了关键词校验，`DINGTALK_KEYWORD` 必须和机器人配置一致
-- 脚本会自动把关键词补到消息正文里，避免被钉钉拦截
-
-然后运行：
-
-```bash
-python3 scripts/daily_report.py
-```
-
-执行后：
-- 本地会生成日报文件
-- 钉钉机器人会直接收到全文
-
----
-
-### 方案四：接微信主动查询
-
-推荐方式：
-
-1. 先定时或手动生成日报
-2. 在微信里让用户发送“日报”
-3. OpenClaw 收到后调用：
-
-```bash
-python3 ~/.openclaw/workspace/skills/daily-report/scripts/query_report.py today
-```
-
-这个查询脚本支持更自然的说法：
-
+用户在微信里发送：
 - `日报`
 - `今日日报`
 - `今天日报`
@@ -184,92 +42,67 @@ python3 ~/.openclaw/workspace/skills/daily-report/scripts/query_report.py today
 - `昨日报`
 - `昨日日报`
 
-并且：
-- 如果当天日报已经存在 → 直接返回全文
-- 如果当天日报不存在 → 先自动生成，再返回全文
+然后由 OpenClaw 调用本仓库的查询脚本，直接把本地日报全文返回给用户。
+
+如果当天日报还没生成，查询脚本会先自动生成再返回。
 
 ---
 
-## 自动化时间如何配置
+# 二、仓库里有哪些入口
 
-这个仓库本身负责：
-- 生成日报
-- 推送飞书 / 钉钉
-- 提供微信查询入口
+## 1）生成日报
 
-**真正的定时执行建议交给 OpenClaw cron。**
-
-推荐做法是：
-
-1. 在本地 `scripts/config.env` 里写入你希望的默认时间
-
-```env
-AUTOMATION_TIME=19:00
-AUTOMATION_TZ=Asia/Shanghai
-```
-
-2. 创建 OpenClaw cron 时，读取这个时间并转换成对应的 cron 表达式
-
-例如：
-- `19:00` → `0 19 * * *`
-- `18:30` → `30 18 * * *`
-
-也就是说，这个项目现在支持的是：
-
-> **自动化时间可配置，但调度本身由 OpenClaw cron 承担。**
-
-这样做的好处是：
-- 不同用户可以保留自己的推送时间
-- skill 仓库本身不需要硬编码某个固定时间
-- 飞书 / 钉钉 / 微信逻辑不受影响
-
----
-
-## 为什么要这样设计
-
-因为 OpenClaw 的数据和日报生成逻辑都在本地：
-
-- 原始对话在本地 sessions
-- 分析总结在本地脚本
-- 日报文件也在本地
-
-所以正确的结构应该是：
-
-- **本地负责生成结果**
-- **飞书 / 钉钉负责主动接收结果**
-- **微信负责按需查询结果**
-
-这样能保证：
-
-- 多个端拿到的是同一份日报
-- 不需要在每个通道重复跑总结逻辑
-- 微信链路不稳定时，仍然能稳定获取全文
-
----
-
-## 最小配置
-
-复制配置文件：
+生成今天日报：
 
 ```bash
-cp scripts/config.env.example scripts/config.env
+python3 scripts/daily_report.py
 ```
 
-最小可用配置：
+生成指定日期日报：
 
-```env
-ENABLE_FEISHU=false
-ENABLE_DINGTALK=false
-ENABLE_GIT=false
-WECHAT_QUERY_HINT_ENABLED=true
-WECHAT_QUERY_COMMAND=日报
+```bash
+python3 scripts/daily_report.py 2026-04-01
+```
+
+生成后的文件位置：
+
+```bash
+~/.openclaw/workspace/data/daily-reports/YYYY-MM-DD.md
 ```
 
 ---
 
-## 自动创建 / 更新定时任务
+## 2）查询日报全文
 
-如果你希望根据 `config.env` 里的时间自动配置 OpenClaw cron，可以直接运行：
+用于微信等“主动查询”场景。
+
+读取今天日报：
+
+```bash
+python3 scripts/query_report.py today
+```
+
+读取昨天日报：
+
+```bash
+python3 scripts/query_report.py yesterday
+```
+
+读取指定日期日报：
+
+```bash
+python3 scripts/query_report.py 2026-04-01
+```
+
+说明：
+- 如果日报文件已存在 → 直接返回全文
+- 如果日报文件不存在 → 自动先生成，再返回全文
+
+---
+
+## 3）自动创建 / 更新定时任务
+
+如果你希望根据配置里的时间自动创建 OpenClaw cron，可以运行：
 
 ```bash
 python3 scripts/setup_cron.py
@@ -285,56 +118,294 @@ python3 scripts/setup_cron.py
 daily-report-auto-delivery
 ```
 
-的 OpenClaw cron 任务
-
-例如：
-
-```env
-AUTOMATION_TIME=19:00
-AUTOMATION_TZ=Asia/Shanghai
-ENABLE_FEISHU=true
-ENABLE_DINGTALK=true
-```
-
-运行：
-
-```bash
-python3 scripts/setup_cron.py
-```
-
-就会自动生成一个每天 19:00 执行的日报推送任务。
+的 OpenClaw cron 任务。
 
 ---
 
-## 常见用法
+# 三、最推荐的接入方式
 
-### 生成今天日报
+## 方案 A：只本地生成
+
+适合先把日报跑起来。
+
+### 第一步：安装依赖
+
+```bash
+python3 -m pip install --user -r requirements.txt
+```
+
+### 第二步：复制配置文件
+
+```bash
+cp scripts/config.env.example scripts/config.env
+```
+
+### 第三步：直接运行
 
 ```bash
 python3 scripts/daily_report.py
 ```
 
-### 生成指定日期日报
+---
+
+## 方案 B：飞书全文推送
+
+### 第一步：复制配置文件
 
 ```bash
-python3 scripts/daily_report.py 2026-04-01
+cp scripts/config.env.example scripts/config.env
 ```
 
-### 读取今天日报全文
+### 第二步：编辑本地配置
+
+编辑：
 
 ```bash
-python3 scripts/query_report.py today
+scripts/config.env
 ```
 
-### 读取昨天日报全文
+填入：
+
+```env
+ENABLE_FEISHU=true
+FEISHU_WEBHOOK_URL=你的飞书机器人 webhook
+```
+
+### 第三步：运行日报脚本
 
 ```bash
-python3 scripts/query_report.py yesterday
+python3 scripts/daily_report.py
+```
+
+效果：
+- 本地生成日报文件
+- 飞书 webhook 收到全文
+
+---
+
+## 方案 C：钉钉全文推送
+
+### 第一步：复制配置文件
+
+```bash
+cp scripts/config.env.example scripts/config.env
+```
+
+### 第二步：编辑本地配置
+
+编辑：
+
+```bash
+scripts/config.env
+```
+
+填入：
+
+```env
+ENABLE_DINGTALK=true
+DINGTALK_WEBHOOK_URL=你的钉钉机器人 webhook
+DINGTALK_KEYWORD=日报
+```
+
+说明：
+- 如果钉钉机器人配置了关键词校验，`DINGTALK_KEYWORD` 必须和钉钉机器人要求一致
+- 脚本会自动把关键词补到消息内容里，避免被钉钉拦截
+
+### 第三步：运行日报脚本
+
+```bash
+python3 scripts/daily_report.py
+```
+
+效果：
+- 本地生成日报文件
+- 钉钉机器人收到全文
+
+---
+
+## 方案 D：微信主动查询
+
+推荐方式：
+
+1. 先手动或定时生成日报
+2. 在微信里让用户发送“日报”或类似口令
+3. OpenClaw 收到后调用：
+
+```bash
+python3 ~/.openclaw/workspace/skills/daily-report/scripts/query_report.py today
+```
+
+如果要查昨天：
+
+```bash
+python3 ~/.openclaw/workspace/skills/daily-report/scripts/query_report.py yesterday
+```
+
+如果要查指定日期：
+
+```bash
+python3 ~/.openclaw/workspace/skills/daily-report/scripts/query_report.py 2026-04-01
+```
+
+说明：
+- 今天没生成 → 会先生成再返回
+- 今天已生成 → 直接返回全文
+
+---
+
+## 方案 E：自动化推送（推荐）
+
+这是最完整的使用方式。
+
+### 第一步：复制配置文件
+
+```bash
+cp scripts/config.env.example scripts/config.env
+```
+
+### 第二步：编辑本地配置
+
+例如：
+
+```env
+ENABLE_FEISHU=true
+FEISHU_WEBHOOK_URL=你的飞书机器人 webhook
+
+ENABLE_DINGTALK=true
+DINGTALK_WEBHOOK_URL=你的钉钉机器人 webhook
+DINGTALK_KEYWORD=日报
+
+WECHAT_QUERY_HINT_ENABLED=true
+WECHAT_QUERY_COMMAND=日报
+
+AUTOMATION_TIME=19:00
+AUTOMATION_TZ=Asia/Shanghai
+```
+
+### 第三步：自动创建 / 更新 cron
+
+```bash
+python3 scripts/setup_cron.py
+```
+
+效果：
+- 每天在你配置的时间自动生成日报
+- 自动推送到飞书 / 钉钉
+- 微信仍然通过主动查询获取全文
+
+---
+
+# 四、配置说明
+
+配置文件位置：
+
+```bash
+scripts/config.env
+```
+
+这是**本地配置文件**，一般不建议提交到公开仓库。  
+仓库里应该保留的是：
+
+```bash
+scripts/config.env.example
+```
+
+真实的 webhook / token / 私有配置，应该只放在你本地的 `config.env` 中。
+
+---
+
+## 常用配置项
+
+### 飞书
+
+```env
+ENABLE_FEISHU=true
+FEISHU_WEBHOOK_URL=
+```
+
+### 钉钉
+
+```env
+ENABLE_DINGTALK=true
+DINGTALK_WEBHOOK_URL=
+DINGTALK_KEYWORD=日报
+```
+
+### 微信查询
+
+```env
+WECHAT_QUERY_HINT_ENABLED=true
+WECHAT_QUERY_COMMAND=日报
+```
+
+### 自动化时间
+
+```env
+AUTOMATION_TIME=19:00
+AUTOMATION_TZ=Asia/Shanghai
+```
+
+不同用户可以改成不同时间，例如：
+
+```env
+AUTOMATION_TIME=18:30
+AUTOMATION_TZ=Asia/Shanghai
+```
+
+或者：
+
+```env
+AUTOMATION_TIME=21:00
+AUTOMATION_TZ=Asia/Shanghai
 ```
 
 ---
 
-## 当前能力边界
+# 五、为什么这样设计
+
+因为 OpenClaw 的数据和日报生成逻辑都在本地：
+
+- 原始对话在本地 sessions
+- 分析总结在本地脚本
+- 日报文件也在本地
+
+所以合理的结构应该是：
+
+- **本地负责生成结果**
+- **飞书 / 钉钉负责主动接收结果**
+- **微信负责按需查询结果**
+
+这样做的好处：
+
+- 多个端拿到的是同一份日报
+- 不需要在每个通道重复跑总结逻辑
+- 微信通道不稳定时，也不影响日报获取
+- 推送时间可以由每个用户自己配置
+
+---
+
+# 六、典型使用流程
+
+## 日常自动化流程
+
+1. OpenClaw cron 到点执行
+2. 调用 `daily_report.py`
+3. 在本地生成日报文件
+4. 自动推送飞书 / 钉钉
+5. 微信侧如果用户发“日报”，调用 `query_report.py` 返回全文
+
+---
+
+## 手动查询流程
+
+1. 用户在微信发 `日报`
+2. OpenClaw 调用 `query_report.py today`
+3. 如果今天日报不存在，先自动生成
+4. 返回日报全文
+
+---
+
+# 七、当前能力边界
 
 当前仓库已经包含：
 
@@ -343,6 +414,7 @@ python3 scripts/query_report.py yesterday
 - Feishu webhook 全文推送
 - DingTalk webhook 全文推送
 - 微信查询脚本入口
+- 自动生成 / 更新 OpenClaw cron 的脚本
 - 配置示例
 
 当前没有直接替你改掉的是：
@@ -353,6 +425,6 @@ python3 scripts/query_report.py yesterday
 
 ---
 
-## 一句话总结
+# 八、一句话总结
 
-> 这是一个本地生成日报、支持飞书和钉钉直接推送全文，并支持微信通过主动查询返回本地日报全文的 OpenClaw skill。
+> 这是一个本地生成日报、支持飞书和钉钉直接推送全文、支持微信主动查询全文，并支持按本地配置自动创建 OpenClaw cron 的 OpenClaw skill。
