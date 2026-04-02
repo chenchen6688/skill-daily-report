@@ -1,6 +1,6 @@
 ---
 name: daily-report
-description: 生成每日工作日报。从 OpenClaw sessions 提取对话记录，支持无 API Key 的基础日报模式；若配置 OpenAI / Anthropic / MiniMax，可生成更自然的 AI 增强版日报。可后续扩展到飞书、Git 或其他发布通道。当用户请求以下内容时触发：(1) 生成工作日报 (2) 生成日报 (3) 日报 (4) daily report (5) 工作总结
+description: 生成每日工作日报。从 OpenClaw sessions 提取对话记录，支持无 API Key 的基础日报模式；若配置 OpenAI / Anthropic / MiniMax，可生成更自然的 AI 增强版日报。支持多端分发策略：飞书可直接推送全文，微信建议采用主动询问式获取全文。
 ---
 
 # 工作日报 (Daily Report)
@@ -9,9 +9,11 @@ description: 生成每日工作日报。从 OpenClaw sessions 提取对话记录
 
 ## 当前特性
 
-- 默认只生成本地 markdown
+- 默认生成本地 markdown
 - **无 API Key 也能运行**（fallback 基础日报）
 - 支持外部 LLM 增强总结：OpenAI / Anthropic / MiniMax
+- 支持 **Feishu 直接推送全文（webhook）**
+- 支持 **微信主动询问式获取全文**
 - 默认关闭 Feishu / Git 外部输出，避免误发
 - 预留 `OPENCLAW_HOME`、`OPENCLAW_SESSIONS_DIR` 以适配不同环境
 
@@ -48,6 +50,8 @@ cp scripts/config.env.example scripts/config.env
 ```bash
 ENABLE_FEISHU=false
 ENABLE_GIT=false
+WECHAT_QUERY_HINT_ENABLED=true
+WECHAT_QUERY_COMMAND=日报
 ```
 
 即使不配置任何 API Key，也会自动生成基础日报。
@@ -83,24 +87,44 @@ OPENCLAW_SESSIONS_DIR=~/.openclaw/agents/main/sessions
 - 清洗并提取用户/助手消息
 - 生成结构化 markdown 日报
 
-适合：
-- 本地测试
-- 通用 skill 底座
-- 没有外部模型凭证的环境
-
 ### 2) AI 增强模式
 
 当存在外部模型 API Key 时，脚本会把清洗后的内容交给模型生成更自然的日报。
 
-适合：
-- 想要更像“人写的”总结
-- 后续飞书推送或正式归档
+## 多端分发说明
+
+### 飞书
+
+若启用：
+
+```bash
+ENABLE_FEISHU=true
+FEISHU_WEBHOOK_URL=...
+```
+
+则脚本会在日报生成后，把**全文**直接推送到飞书 webhook。
+
+### 微信
+
+由于当前部分环境中的 `openclaw-weixin` 主动推送链路不稳定，因此当前推荐：
+
+- 先生成日报
+- 再让用户在微信里主动发送 `日报`（或自定义口令）
+- 由机器人返回全文
+
+可通过下列配置修改提示文案：
+
+```bash
+WECHAT_QUERY_HINT_ENABLED=true
+WECHAT_QUERY_COMMAND=日报
+```
 
 ## 当前限制
 
-- 当前版本的 Feishu / Git 发布逻辑仍保留为占位接口，未默认启用
+- 当前版本的 Git 发布逻辑仍保留为占位接口，未默认启用
 - Cron 执行记录暂未做强绑定 CLI 解析，以避免不同 OpenClaw 版本差异导致失败
 - fallback 模式已可用，但文案质量仍可继续优化
+- 微信侧“收到口令自动回全文”的对话路由实现仍需在更上层接入
 
 ## 建议的后续扩展
 
@@ -109,7 +133,8 @@ OPENCLAW_SESSIONS_DIR=~/.openclaw/agents/main/sessions
 - collector：读取 sessions / cron
 - cleaner：清洗噪音、过滤系统消息
 - generator：fallback / LLM 增强
-- publisher：Feishu / Git / webhook
+- publisher：Feishu / Git / webhook / 微信提示
+- query-handler：处理微信端“日报”查询口令
 
 这样后续可以低成本扩展为：
 

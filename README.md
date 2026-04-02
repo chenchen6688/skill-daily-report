@@ -1,31 +1,101 @@
 # skill-daily-report
 
 一个用于汇总 OpenClaw 聊天记录并生成工作日报的 skill。  
-目标是把原始 session 对话，整理成**可读、可保存、可复盘**的结构化日报。
+目标是把原始 session 对话，整理成**可读、可保存、可复盘**的结构化日报，并支持**多端分发策略**。
 
-当前版本主打三件事：
+当前版本的多端策略是：
 
-- **本地可直接跑**
-- **没有 API Key 也能用**
-- **默认安全，不会乱发消息**
+- **本地**：始终生成 markdown 日报
+- **飞书**：支持直接推送日报全文
+- **微信**：不依赖主动推送，改为“用户主动询问后返回全文”
+
+这样做的原因很现实：
+
+- 飞书适合**稳定主动推送**
+- 微信在当前 `openclaw-weixin` 链路下，**主动推送存在兼容性/稳定性问题**
+- 所以微信端采用**主动询问式获取全文**，能最大化保持功能一致，同时避免漏消息
 
 ---
 
 # 一句话说明
 
 这是一个把 **OpenClaw session 历史自动整理成日报** 的工具。  
-适合每天和 OpenClaw 协作做事、想自动生成工作总结的人。
+适合每天和 OpenClaw 协作做事、想自动生成工作总结，并希望在不同终端上用不同分发策略的人。
 
 ---
 
-# 适合谁用
+# 当前能力
+
+当前版本主打四件事：
+
+- **本地可直接跑**
+- **没有 API Key 也能用**
+- **支持多端分发策略**
+- **默认安全，不会乱发消息**
+
+---
+
+# 多端策略说明（重点）
+
+## 1）本地端
+
+无论是否启用外部推送，脚本都会先生成本地日报文件：
+
+```bash
+~/.openclaw/workspace/data/daily-reports/YYYY-MM-DD.md
+```
+
+这是所有分发方式的基础。
+
+---
+
+## 2）飞书端：直接推送全文
+
+飞书端适合做**主动推送全文**。
+
+当前实现方式：
+
+- 若配置 `FEISHU_WEBHOOK_URL`
+- 且 `ENABLE_FEISHU=true`
+- 生成日报后会把**日报全文**直接 POST 到飞书 webhook
 
 适合：
 
-- 已经在使用 OpenClaw 的用户
-- 想把每天和 AI 的协作过程整理成日报的人
-- 没有外部模型 API Key，但也想先本地跑起来的人
-- 想继续扩展成周报 / 飞书推送 / 微信提醒 / Git 归档的人
+- 日报群
+- 个人机器人通知
+- 每晚固定时间自动收全文
+
+---
+
+## 3）微信端：主动询问获取全文
+
+微信端目前**不建议依赖主动推送全文**。
+
+原因是当前 `openclaw-weixin` 在部分环境下存在这样的问题：
+
+- 用户从微信发消息给机器人：正常
+- 机器人在同一微信上下文里回复：正常
+- cron / sessions_send / announce 主动推送：可能失败或不稳定
+
+所以当前推荐策略是：
+
+- 日报照常生成
+- 微信端保留一个**主动询问入口**
+- 用户在微信里发送：
+
+```text
+日报
+```
+
+然后机器人返回当天日报全文。
+
+你也可以把指令改成别的，比如：
+
+```env
+WECHAT_QUERY_COMMAND=今日日报
+```
+
+这样就变成在微信里发“今日日报”来取全文。
 
 ---
 
@@ -34,7 +104,7 @@
 ## 1）克隆仓库
 
 ```bash
-git clone https://github.com/chenchen6688/skill-daily-report.git
+git clone git@github.com:chenchen6688/skill-daily-report.git
 cd skill-daily-report
 ```
 
@@ -95,6 +165,7 @@ cat ~/.openclaw/workspace/data/daily-reports/2026-04-01.md
 - 生成本地 markdown 日报
 - **不会默认发飞书**
 - **不会默认推 Git**
+- **会输出一条适合微信端使用的“主动询问提示”**
 - **没有 API Key 也能跑**
 
 也就是说：
@@ -126,8 +197,6 @@ cat ~/.openclaw/workspace/data/daily-reports/2026-04-01.md
 # 没有 API Key 能不能用？
 
 **可以。**
-
-这是这个项目这次重点改造的地方之一。
 
 ## 当前逻辑
 
@@ -172,6 +241,10 @@ cp scripts/config.env.example scripts/config.env
 
 然后按需修改。
 
+---
+
+# 多端配置示例
+
 ## 最小可用配置
 
 保持下面这样就可以：
@@ -179,7 +252,45 @@ cp scripts/config.env.example scripts/config.env
 ```env
 ENABLE_FEISHU=false
 ENABLE_GIT=false
+WECHAT_QUERY_HINT_ENABLED=true
+WECHAT_QUERY_COMMAND=日报
 ```
+
+这样会：
+
+- 只生成本地日报
+- 给出微信端主动询问提示
+- 不做外部发送
+
+---
+
+## 启用飞书全文推送
+
+```env
+ENABLE_FEISHU=true
+FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/xxxx
+WECHAT_QUERY_HINT_ENABLED=true
+WECHAT_QUERY_COMMAND=日报
+```
+
+这样会：
+
+- 本地生成日报
+- 飞书直接收到全文
+- 微信端通过“日报”主动询问获取全文
+
+---
+
+## 自定义微信端查询口令
+
+```env
+WECHAT_QUERY_HINT_ENABLED=true
+WECHAT_QUERY_COMMAND=今日日报
+```
+
+此时微信端建议文案会变成：
+
+> 在微信里发送“今日日报”获取全文。
 
 ---
 
@@ -240,31 +351,34 @@ python3 scripts/daily_report.py
 
 ---
 
-# 现在的推荐使用方式
+# 运行结果会输出什么
 
-我建议你把它当成：
+脚本执行后一般会输出：
 
-> **一个本地优先的 OpenClaw 日报生成器**
+- sessions 目录
+- 抓取到的字符数
+- 日报保存路径
+- 若启用飞书：推送结果
+- 一条微信端建议提示，例如：
 
-最适合当前版本的使用方式是：
-
-- 手动运行生成日报
-- 或每天定时生成日报并提醒自己查看
-
-而不是一上来就期待它是一个成熟的一键全自动发布系统。
+```text
+今日日报已生成：2026-04-01
+文件路径：~/.openclaw/workspace/data/daily-reports/2026-04-01.md
+由于微信主动推送链路在部分环境下不稳定，建议你在微信里发送“日报”，再由机器人返回全文。
+```
 
 ---
 
 # 定时使用（推荐）
 
-这个项目很适合接 OpenClaw cron 做定时任务。  
-比如每天 23:00：
+这个项目很适合接 OpenClaw cron 做定时任务。比如每天 23:00：
 
 1. 自动运行日报脚本
 2. 生成本地日报文件
-3. 通过微信或其他通道提醒“今日日报已生成”
+3. 飞书直接收到全文
+4. 微信侧通过主动询问口令获取全文
 
-这种方式比“直接自动发送全文”更稳，也更适合当前版本。
+这种方式比“强行要求微信也主动推全文”更稳。
 
 ---
 
@@ -279,6 +393,9 @@ python3 scripts/daily_report.py
 - 增加 cleaner，降低 metadata / reply tag / heartbeat 等噪音影响
 - 将 fallback 输出改成规则化模板，而不是原文硬拼
 - 增加 `config.env.example`、`README.md`、`requirements.txt`、`.gitignore`
+- 增加 **多端分发策略说明**
+- 增加 **飞书全文推送能力（webhook 方式）**
+- 增加 **微信主动询问式获取全文** 的产品化说明和配置项
 
 ---
 
@@ -286,55 +403,50 @@ python3 scripts/daily_report.py
 
 当前版本还不是终版，以下能力暂未完整实现：
 
-- 真正的 Feishu publisher
+- 真正的 Feishu 用户 ID 点对点消息发送（目前优先 webhook）
 - 真正的 Git publisher
 - 稳定的 cron 历史记录解析
 - 周报 / 日期区间总结
 - 更强的模板系统
 - 更细粒度的内容归纳
+- 微信端自动识别“日报”并回全文的对话侧实现（当前先把 skill 侧策略和输出补齐）
 
 所以当前定位更适合描述为：
 
-> **一个已经可用的通用 skill 雏形 / 本地日报工具**
+> **一个已经可用的通用 skill 雏形 / 本地日报工具 + 多端分发策略底座**
 
 ---
 
 # 常见问题
 
-## 1）运行了但没生成内容
-先检查：
+## 1）为什么微信不直接主动推全文？
 
-```bash
-ls ~/.openclaw/agents/main/sessions
-```
+因为当前 `openclaw-weixin` 在部分环境下存在主动推送不稳定的问题。  
+为了避免“系统显示已发送，但微信里实际没收到”，当前策略改为：
 
-如果这里没有 session 文件，那就没有素材可总结。
+- 飞书直接推送全文
+- 微信主动询问取全文
+
+这是更稳的方案。
 
 ---
 
-## 2）我的 OpenClaw 不在默认目录
-设置：
+## 2）飞书为什么建议用 webhook？
 
-```bash
-export OPENCLAW_HOME=你的目录
-```
-
-或：
-
-```bash
-export OPENCLAW_SESSIONS_DIR=你的sessions目录
-```
+因为 webhook 接入简单、稳定、清晰，适合日报这类单向通知。
 
 ---
 
 ## 3）没有 API Key 会报错吗？
+
 不会直接挂，会自动走 fallback 基础日报模式。
 
 ---
 
-## 4）为什么默认不发飞书 / 不 push Git？
+## 4）为什么默认不 push Git？
+
 这是故意的。  
-为了避免测试时误发消息、误推送代码，默认配置采用保守策略。
+为了避免测试时误推送代码，默认配置采用保守策略。
 
 ---
 
@@ -345,8 +457,9 @@ export OPENCLAW_SESSIONS_DIR=你的sessions目录
 - `collector`：读取 sessions / cron
 - `cleaner`：清洗 metadata 和系统噪音
 - `generator`：fallback / AI 增强
-- `publisher`：Feishu / Git / webhook / 微信提醒
+- `publisher`：Feishu / Git / webhook / 微信提示
 - `templates`：日报 / 周报 / 项目总结模板
+- `wechat-query-handler`：在微信端识别“日报”并自动回全文
 
 这样后续可以低成本扩展成：
 
@@ -382,4 +495,4 @@ scripts/config.env
 
 # 一句话总结
 
-> 一个把 OpenClaw session 历史自动整理成结构化工作日报的 skill，支持无 API Key fallback、本地优先和后续多渠道扩展。
+> 一个把 OpenClaw session 历史自动整理成结构化工作日报的 skill，支持无 API Key fallback、本地优先，以及“飞书直接推全文 + 微信主动询问取全文”的多端分发策略。

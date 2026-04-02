@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-每日工作报告生成器（通用版雏形）
+每日工作报告生成器（多端版）
 - 默认本地生成 markdown
 - 支持外部 LLM（OpenAI / Anthropic / MiniMax）增强总结
 - 无 API Key 时自动 fallback 到规则化日报
-- 默认不发送飞书、不推送 Git，需显式开启
+- 支持 Feishu 直接推送全文
+- 支持生成微信端“主动询问式获取全文”的提示文案
 """
 
 import os
@@ -15,6 +16,7 @@ import json
 import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
+from urllib import request, error
 
 
 NOISE_PATTERNS = [
@@ -90,6 +92,9 @@ CONFIG = load_config()
 FEISHU_USER_ID = os.environ.get("FEISHU_USER_ID", CONFIG.get("FEISHU_USER_ID", ""))
 ENABLE_FEISHU = os.environ.get("ENABLE_FEISHU", CONFIG.get("ENABLE_FEISHU", "false")).lower() == "true"
 ENABLE_GIT = os.environ.get("ENABLE_GIT", CONFIG.get("ENABLE_GIT", "false")).lower() == "true"
+WECHAT_QUERY_HINT_ENABLED = os.environ.get("WECHAT_QUERY_HINT_ENABLED", CONFIG.get("WECHAT_QUERY_HINT_ENABLED", "true")).lower() == "true"
+WECHAT_QUERY_COMMAND = os.environ.get("WECHAT_QUERY_COMMAND", CONFIG.get("WECHAT_QUERY_COMMAND", "日报")).strip() or "日报"
+FEISHU_WEBHOOK_URL = os.environ.get("FEISHU_WEBHOOK_URL", CONFIG.get("FEISHU_WEBHOOK_URL", "")).strip()
 
 
 def get_today_date():
@@ -377,6 +382,17 @@ def build_rule_based_sections(facts):
     }
 
 
+def build_wechat_query_hint(target_date, report_file):
+    if not WECHAT_QUERY_HINT_ENABLED:
+        return ""
+    return (
+        f"\n\n---\n"
+        f"## 微信端获取方式\n"
+        f"由于微信通道的主动推送链路在部分环境下不稳定，建议在微信里主动发送 **{WECHAT_QUERY_COMMAND}** 获取 {target_date} 的日报全文。\n\n"
+        f"已生成文件：`{report_file}`\n"
+    )
+
+
 def build_fallback_report(sessions_content, target_date):
     lines = extract_message_lines(sessions_content)
     user_lines = [x[7:].strip() for x in lines if x.startswith('[user]:')]
@@ -547,15 +563,41 @@ def save_report(content, date=None):
     return report_file
 
 
-def send_to_feishu(content):
+def send_to_feishu(content, target_date):
     if not ENABLE_FEISHU:
         print("飞书推送已禁用")
         return True
-    if not FEISHU_USER_ID:
-        print("未配置 FEISHU_USER_ID，跳过飞书推送")
+
+    if FEISHU_WEBHOOK_URL:
+        payload = json.dumps({"msg_type": "text", "content": {"text": content}}, ensure_ascii=False).encode("utf-8")
+        req = request.Request(FEISHU_WEBHOOK_URL, data=payload, headers={"Content-Type": "application/json"}, method="POST")
+        try:
+            with request.urlopen(req, timeout=20) as resp:
+                body = resp.read().decode("utf-8", errors="ignore")
+                print(f"飞书 webhook 推送成功: HTTP {resp.status} | {body[:300]}")
+                return True
+        except error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="ignore") if hasattr(e, 'read') else ''
+            print(f"飞书 webhook 推送失败: HTTP {e.code} | {body[:300]}")
+            return False
+        except Exception as e:
+            print(f"飞书 webhook 推送失败: {e}")
+            return False
+
+    if FEISHU_USER_ID:
+        print(f"已启用 Feishu 推送，但当前仅配置了 FEISHU_USER_ID={FEISHU_USER_ID}。建议补充 FEISHU_WEBHOOK_URL 以直接推送 {target_date} 日报全文。")
         return False
-    print("当前版本保留 Feishu publisher 接口，但默认未实现发送逻辑")
+
+    print("已启用 Feishu 推送，但未配置 FEISHU_WEBHOOK_URL 或 FEISHU_USER_ID，跳过发送")
     return False
+
+
+def build_wechat_query_message(target_date, report_file):
+    return (
+        f"今日日报已生成：{target_date}\n"
+        f"文件路径：{report_file}\n"
+        f"由于微信主动推送链路在部分环境下不稳定，建议你在微信里发送“{WECHAT_QUERY_COMMAND}”，再由机器人返回全文。"
+    )
 
 
 def push_to_git(target_date):
@@ -572,7 +614,7 @@ def main():
         target_date = sys.argv[1]
 
     print(f"生成 {target_date} 的工作日报...")
-    print(f"飞书: {ENABLE_FEISHU} | Git: {ENABLE_GIT}")
+    print(f"飞书: {ENABLE_FEISHU} | Git: {ENABLE_GIT} | 微信主动询问提示: {WECHAT_QUERY_HINT_ENABLED}")
 
     sessions_content = get_sessions_for_date(target_date)
     print(f"获取到 {len(sessions_content)} 字符")
@@ -581,12 +623,18 @@ def main():
     report_file = save_report(report, target_date)
     print(f"日报已保存到: {report_file}")
 
+    report_with_hint = report + build_wechat_query_hint(target_date, report_file)
+
     if ENABLE_FEISHU:
-        send_to_feishu(report)
+        send_to_feishu(report_with_hint, target_date)
+
+    print("微信端建议提示：")
+    print(build_wechat_query_message(target_date, report_file))
+
     if ENABLE_GIT:
         push_to_git(target_date)
 
-    return report
+    return report_with_hint
 
 
 if __name__ == "__main__":
